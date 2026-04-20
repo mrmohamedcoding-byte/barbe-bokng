@@ -2,7 +2,7 @@
 
 import { FadeIn } from "@/components/ui/FadeIn";
 import { useState, useEffect } from "react";
-import { getSupabaseClient, isSupabaseConfigured } from "@/lib/supabase";
+import { isSupabaseConfigured, getSupabaseClient } from "@/lib/supabase";
 import { Mail, Loader2, ArrowLeft, CheckCircle, AlertCircle } from "lucide-react";
 import Link from "next/link";
 
@@ -38,27 +38,25 @@ export default function ForgotPasswordPage() {
       return;
     }
 
-    const client = getSupabaseClient();
-    if (!client) {
-      setError("Authentication service not ready. Please refresh the page.");
-      return;
-    }
-
     setIsLoading(true);
     setError(null);
     setSuccess(false);
 
     try {
-      const redirectUrl = `${window.location.origin}/admin/reset-password`;
-      const { error: resetError } = await client.auth.resetPasswordForEmail(email, {
-        redirectTo: redirectUrl,
+      // Use custom API for password reset (supports Resend emails)
+      const response = await fetch('/api/auth/request-reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
       });
 
-      if (resetError) {
-        setError(resetError.message);
-      } else {
-        setSuccess(true);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to send reset email');
       }
+
+      setSuccess(true);
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "An unexpected error occurred";
       setError(errorMessage);
@@ -85,18 +83,18 @@ export default function ForgotPasswordPage() {
 
           <form onSubmit={handleReset} className="space-y-6">
             {error && (
-              <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-sm p-4 rounded-sm flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0" />
+              <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-sm p-4 rounded-sm flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                 {error}
               </div>
             )}
             
             {success && (
-              <div className="bg-green-500/10 border border-green-500/20 text-green-400 text-sm p-4 rounded-sm flex items-center gap-2 text-center">
-                <CheckCircle className="w-4 h-4 shrink-0" />
+              <div className="bg-green-500/10 border border-green-500/20 text-green-400 text-sm p-4 rounded-sm flex items-start gap-2">
+                <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
                 <div>
                   <p className="font-semibold">Reset link sent!</p>
-                  <p className="text-green-400/70 text-xs mt-1">Check your inbox for the reset link.</p>
+                  <p className="text-green-400/70 text-xs mt-1">Check your inbox for the reset link. Also check spam folder.</p>
                 </div>
               </div>
             )}
@@ -111,7 +109,8 @@ export default function ForgotPasswordPage() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="w-full bg-neutral-950 border border-white/10 p-4 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors"
-                    placeholder="mr.mohamed.coding@gmail.com"
+                    placeholder="admin@yourdomain.com"
+                    autoComplete="email"
                   />
                 </div>
 
