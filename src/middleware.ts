@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-// Routes that don't require authentication
+// Routes that don't require authentication (exact match for login pages)
 const publicRoutes = ['/admin/login', '/admin/forgot-password', '/admin/reset-password']
 
 // Routes that require authentication
@@ -39,18 +39,18 @@ export async function middleware(request: NextRequest) {
   // Get current user from session
   const { data: { user } } = await supabase.auth.getUser()
 
-  const isPublicRoute = publicRoutes.some(route => pathname.startsWith(route))
+  const isPublicRoute = publicRoutes.includes(pathname)
   const isProtectedRoute = protectedRoutes.some(route => pathname.startsWith(route))
 
   // If accessing protected route without auth, redirect to login
-  if (isProtectedRoute && !user) {
+  if (isProtectedRoute && !user && pathname !== '/admin/login') {
     const loginUrl = new URL('/admin/login', request.url)
     loginUrl.searchParams.set('redirect', pathname)
     return NextResponse.redirect(loginUrl)
   }
 
-  // If already logged in and accessing public auth pages, redirect to admin
-  if (isPublicRoute && user) {
+  // If already logged in and accessing login page, redirect to admin
+  if (pathname === '/admin/login' && user) {
     return NextResponse.redirect(new URL('/admin', request.url))
   }
 
