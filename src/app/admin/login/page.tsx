@@ -1,210 +1,140 @@
 "use client";
 
-import { useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { FadeIn } from "@/components/ui/FadeIn";
+import { useState, useEffect, useRef } from "react";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+import { Lock, Loader2 } from "lucide-react";
+import Link from "next/link";
 
 export default function AdminLoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isClientReady, setIsClientReady] = useState(false);
+  const supabaseRef = useRef<SupabaseClient | null>(null);
   const router = useRouter();
+
+  // Initialize Supabase client only on the client side
+  useEffect(() => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    
+    if (!supabaseUrl || !supabaseKey) {
+      console.error("Missing Supabase environment variables!");
+      setError("Configuration error. Contact administrator.");
+      return;
+    }
+    
+    try {
+      supabaseRef.current = createClient(supabaseUrl, supabaseKey, {
+        auth: {
+          persistSession: true,
+          autoRefreshToken: true,
+        },
+      });
+      setIsClientReady(true);
+      console.log("Supabase client initialized");
+    } catch (err) {
+      console.error("Failed to create Supabase client:", err);
+      setError("Failed to initialize authentication.");
+    }
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    setError("");
+    
+    if (!supabaseRef.current) {
+      setError("Authentication service not ready. Please refresh the page.");
+      setIsLoading(false);
+      return;
+    }
 
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    setIsLoading(true);
+    setError(null);
 
-    const { data, error: authError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      const { error: authError } = await supabaseRef.current.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    if (authError) {
-      setError(authError.message);
-      setLoading(false);
-    } else if (data.user) {
+      if (authError) {
+        setError(authError.message);
+        setIsLoading(false);
+        return;
+      }
+
+      // Login successful - redirect
       router.push("/admin");
+    } catch (err) {
+      console.error("Login error:", err);
+      setError("An unexpected error occurred. Please try again.");
+      setIsLoading(false);
     }
   };
 
   return (
-    <div style={{
-      minHeight: "100vh",
-      backgroundColor: "#09090b",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      padding: "1rem"
-    }}>
-      <div style={{
-        backgroundColor: "#18181b",
-        border: "1px solid rgba(255,255,255,0.05)",
-        borderRadius: "0.5rem",
-        padding: "2rem",
-        width: "100%",
-        maxWidth: "28rem"
-      }}>
-        <div style={{
-          display: "flex",
-          justifyContent: "center",
-          marginBottom: "1.5rem"
-        }}>
-          <div style={{
-            width: "4rem",
-            height: "4rem",
-            backgroundColor: "#09090b",
-            borderRadius: "9999px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            border: "1px solid rgba(255,255,255,0.05)"
-          }}>
-            <span style={{ fontSize: "1.5rem" }}>🔒</span>
+    <div className="flex flex-col flex-grow bg-neutral-950 items-center justify-center p-4">
+      <FadeIn className="w-full max-w-md">
+        <div className="bg-neutral-900 border border-white/5 p-8 rounded-sm shadow-2xl">
+          <div className="flex justify-center mb-6">
+            <div className="w-16 h-16 bg-neutral-950 rounded-full flex items-center justify-center text-gold-500 border border-white/5">
+              <Lock className="w-6 h-6" />
+            </div>
           </div>
+          
+          <h1 className="font-playfair text-3xl font-bold text-white text-center mb-2">Admin Portal</h1>
+          <p className="text-neutral-400 text-sm text-center mb-8">Authorized personnel only.</p>
+
+          <form onSubmit={handleLogin} className="space-y-6">
+            {error && (
+              <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-sm p-4 rounded-sm">
+                {error}
+              </div>
+            )}
+            
+            <div>
+              <label className="block text-xs uppercase tracking-wider text-neutral-400 font-semibold mb-2">Email Address</label>
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full bg-neutral-950 border border-white/10 p-4 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors"
+                placeholder="admin@example.com"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs uppercase tracking-wider text-neutral-400 font-semibold mb-2">Password</label>
+              <input
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-neutral-950 border border-white/10 p-4 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors"
+                placeholder="••••••••"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={isLoading || !isClientReady}
+              className="w-full bg-gold-500 hover:bg-gold-400 text-neutral-950 py-4 font-bold uppercase tracking-widest rounded-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Sign In"}
+            </button>
+
+            <div className="text-center pt-2">
+              <Link href="/admin/forgot-password" className="text-neutral-400 text-sm hover:text-gold-500 transition-colors">
+                Forgot your password?
+              </Link>
+            </div>
+          </form>
         </div>
-
-        <h1 style={{
-          fontSize: "1.875rem",
-          fontWeight: "bold",
-          color: "white",
-          textAlign: "center",
-          marginBottom: "0.5rem",
-          fontFamily: "Georgia, serif"
-        }}>
-          Admin Portal
-        </h1>
-        <p style={{
-          color: "#a1a1aa",
-          textAlign: "center",
-          marginBottom: "2rem",
-          fontSize: "0.875rem"
-        }}>
-          Authorized personnel only
-        </p>
-
-        {error && (
-          <div style={{
-            backgroundColor: "rgba(239,68,68,0.1)",
-            border: "1px solid rgba(239,68,68,0.2)",
-            color: "#f87171",
-            padding: "1rem",
-            borderRadius: "0.25rem",
-            marginBottom: "1.5rem",
-            fontSize: "0.875rem"
-          }}>
-            {error}
-          </div>
-        )}
-
-        <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
-          <div>
-            <label style={{
-              display: "block",
-              fontSize: "0.75rem",
-              textTransform: "uppercase",
-              letterSpacing: "0.05em",
-              color: "#a1a1aa",
-              fontWeight: 600,
-              marginBottom: "0.5rem"
-            }}>
-              Email Address
-            </label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              style={{
-                width: "100%",
-                backgroundColor: "#09090b",
-                border: "1px solid rgba(255,255,255,0.1)",
-                padding: "1rem",
-                borderRadius: "0.25rem",
-                color: "white",
-                fontSize: "1rem",
-                outline: "none"
-              }}
-              placeholder="admin@example.com"
-            />
-          </div>
-
-          <div>
-            <label style={{
-              display: "block",
-              fontSize: "0.75rem",
-              textTransform: "uppercase",
-              letterSpacing: "0.05em",
-              color: "#a1a1aa",
-              fontWeight: 600,
-              marginBottom: "0.5rem"
-            }}>
-              Password
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              style={{
-                width: "100%",
-                backgroundColor: "#09090b",
-                border: "1px solid rgba(255,255,255,0.1)",
-                padding: "1rem",
-                borderRadius: "0.25rem",
-                color: "white",
-                fontSize: "1rem",
-                outline: "none"
-              }}
-              placeholder="••••••••"
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            style={{
-              width: "100%",
-              backgroundColor: "#d4af37",
-              color: "#09090b",
-              padding: "1rem",
-              fontWeight: "bold",
-              textTransform: "uppercase",
-              letterSpacing: "0.05em",
-              borderRadius: "0.25rem",
-              border: "none",
-              cursor: loading ? "not-allowed" : "pointer",
-              opacity: loading ? 0.5 : 1,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "0.5rem",
-              fontSize: "0.875rem"
-            }}
-          >
-            {loading ? "Signing in..." : "Sign In"}
-          </button>
-        </form>
-
-        <div style={{ textAlign: "center", marginTop: "1rem" }}>
-          <a
-            href="/admin/forgot-password"
-            style={{
-              color: "#a1a1aa",
-              fontSize: "0.875rem",
-              textDecoration: "none"
-            }}
-          >
-            Forgot your password?
-          </a>
-        </div>
-      </div>
+      </FadeIn>
     </div>
   );
 }
