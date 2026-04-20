@@ -2,12 +2,12 @@
 
 import { FadeIn } from "@/components/ui/FadeIn";
 import { useState, useEffect } from "react";
-import { format, addDays, startOfToday, isSameDay, parseISO } from "date-fns";
+import { format, addDays, startOfToday, isSameDay } from "date-fns";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { supabase } from "@/lib/supabase";
-import { CheckCircle2, Loader2, Calendar as CalendarIcon, Clock } from "lucide-react";
+import { getSupabaseClient, isSupabaseConfigured } from "@/lib/supabase";
+import { CheckCircle2, Loader2, Calendar as CalendarIcon, Clock, AlertCircle, WifiOff } from "lucide-react";
 
 const bookingSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
@@ -40,6 +40,7 @@ export default function BookingPage() {
   const [isLoadingSlots, setIsLoadingSlots] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [networkError, setNetworkError] = useState<string | null>(null);
 
   const { register, handleSubmit, formState: { errors }, reset } = useForm<BookingFormValues>({
     resolver: zodResolver(bookingSchema),
@@ -50,21 +51,42 @@ export default function BookingPage() {
 
   useEffect(() => {
     async function fetchBookedSlots() {
+      if (!isSupabaseConfigured()) {
+        setNetworkError("Booking service is not configured. Please try again later.");
+        return;
+      }
+
       setIsLoadingSlots(true);
-      setSelectedTime(null); // Reset time when date changes
+      setSelectedTime(null);
+      setNetworkError(null);
+      
+      const client = getSupabaseClient();
+      if (!client) {
+        setNetworkError("Failed to connect to booking service. Please refresh.");
+        setIsLoadingSlots(false);
+        return;
+      }
       
       const formattedDate = format(selectedDate, "yyyy-MM-dd");
       
-      const { data, error } = await supabase
-        .from("appointments")
-        .select("time")
-        .eq("date", formattedDate);
+      try {
+        const { data, error } = await client
+          .from("appointments")
+          .select("time")
+          .eq("date", formattedDate);
 
-      if (error) {
-        console.error("Error fetching slots:", error);
-      } else {
-        setBookedSlots(data.map(a => a.time));
+        if (error) {
+          console.error("Error fetching slots:", error);
+          setNetworkError("Failed to load available time slots.");
+        } else {
+          setBookedSlots(data.map(a => a.time));
+          setNetworkError(null);
+        }
+      } catch (err) {
+        console.error("Network error:", err);
+        setNetworkError("Network error. Please check your connection.");
       }
+      
       setIsLoadingSlots(false);
     }
 
@@ -77,44 +99,61 @@ export default function BookingPage() {
       return;
     }
 
-    setIsSubmitting(true);
-    
-    // Create UTC date string to avoid timezone issues, or just using ISO date part
-    const formattedDate = format(selectedDate, "yyyy-MM-dd");
-
-    const { error } = await supabase.from("appointments").insert({
-      name: data.name,
-      phone: data.phone,
-      service: data.service,
-      date: formattedDate,
-      time: selectedTime,
-    });
-
-    if (!error) {
-      // Trigger email notification silently
-      fetch('/api/notify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: data.name,
-          phone: data.phone,
-          service: data.service,
-          date: formattedDate,
-          time: selectedTime,
-        })
-      }).catch(err => console.error('Silent email fetch error:', err));
+    const client = getSupabaseClient();
+    if (!client) {
+      setNetworkError("Failed to connect to booking service. Please refresh.");
+      return;
     }
 
-    setIsSubmitting(false);
+    setIsSubmitting(true);
+    setNetworkError(null);
+    
+    const formattedDate = format(selectedDate, "yyyy-MM-dd");
 
-    if (error) {
-      console.error(error);
-      alert("Failed to book appointment. The time slot might have just been taken.");
-    } else {
+    try {
+      const { error } = await client.from("appointments").insert({
+        name: data.name,
+        phone: data.phone,
+        service: data.service,
+        date: formattedDate,
+        time: selectedTime,
+      });
+
+      if (error) {
+        console.error("Booking error:", error);
+        setNetworkError(error.message.includes("duplicate") 
+          ? "This time slot was just booked. Please select another."
+          : "Failed to book appointment. Please try again.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Trigger email notification silently
+      try {
+        await fetch('/api/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: data.name,
+            phone: data.phone,
+            service: data.service,
+            date: formattedDate,
+            time: selectedTime,
+          })
+        });
+      } catch {
+        // Silent fail - booking already succeeded
+      }
+
       setIsSuccess(true);
       reset();
       setSelectedTime(null);
+    } catch (err) {
+      console.error("Submit error:", err);
+      setNetworkError("Failed to book appointment. Please try again.");
     }
+    
+    setIsSubmitting(false);
   };
 
   if (isSuccess) {
@@ -152,6 +191,19 @@ export default function BookingPage() {
             </p>
           </FadeIn>
         </div>
+
+        {networkError && (
+          <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-sm mb-8 flex items-center gap-3 max-w-6xl mx-auto">
+            <AlertCircle className="w-5 h-5 shrink-0" />
+            <span>{networkError}</span>
+            <button 
+              onClick={() => setNetworkError(null)} 
+              className="ml-auto text-red-400/70 hover:text-red-400"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
           
@@ -204,29 +256,36 @@ export default function BookingPage() {
                   {isLoadingSlots && <Loader2 className="w-5 h-5 text-gold-500 animate-spin" />}
                 </div>
 
-                <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
-                  {TIME_SLOTS.map((time) => {
-                    const isBooked = bookedSlots.includes(time);
-                    const isSelected = selectedTime === time;
+                {isLoadingSlots ? (
+                  <div className="flex items-center justify-center py-8 text-neutral-400">
+                    <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                    Loading available slots...
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                    {TIME_SLOTS.map((time) => {
+                      const isBooked = bookedSlots.includes(time);
+                      const isSelected = selectedTime === time;
 
-                    return (
-                      <button
-                        key={time}
-                        disabled={isBooked || isLoadingSlots}
-                        onClick={() => setSelectedTime(time)}
-                        className={`py-3 px-2 rounded-sm text-sm font-semibold transition-all border outline-none ${
-                          isBooked
-                            ? "opacity-30 cursor-not-allowed bg-neutral-950 border-white/5 text-neutral-500 line-through"
-                            : isSelected
-                            ? "bg-gold-500 text-neutral-950 border-gold-500"
-                            : "bg-neutral-950 border-white/5 text-white hover:border-gold-500/50"
-                        }`}
-                      >
-                        {time}
-                      </button>
-                    );
-                  })}
-                </div>
+                      return (
+                        <button
+                          key={time}
+                          disabled={isBooked || isLoadingSlots}
+                          onClick={() => setSelectedTime(time)}
+                          className={`py-3 px-2 rounded-sm text-sm font-semibold transition-all border outline-none ${
+                            isBooked
+                              ? "opacity-30 cursor-not-allowed bg-neutral-950 border-white/5 text-neutral-500 line-through"
+                              : isSelected
+                              ? "bg-gold-500 text-neutral-950 border-gold-500"
+                              : "bg-neutral-950 border-white/5 text-white hover:border-gold-500/50"
+                          }`}
+                        >
+                          {time}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </FadeIn>
           </div>
@@ -286,7 +345,14 @@ export default function BookingPage() {
                     disabled={isSubmitting || !selectedTime}
                     className="w-full bg-gold-500 hover:bg-gold-400 text-neutral-950 py-4 font-bold uppercase tracking-widest rounded-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   >
-                    {isSubmitting ? <Loader2 className="w-5 h-5 animate-spin" /> : "Confirm Booking"}
+                    {isSubmitting ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        Booking...
+                      </>
+                    ) : (
+                      "Confirm Booking"
+                    )}
                   </button>
                 </div>
               </form>

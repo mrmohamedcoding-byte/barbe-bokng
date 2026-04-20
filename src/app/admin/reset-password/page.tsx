@@ -2,7 +2,7 @@
 
 import { FadeIn } from "@/components/ui/FadeIn";
 import { useState, useEffect } from "react";
-import { supabase } from "@/lib/supabase";
+import { getSupabaseClient, isSupabaseConfigured } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import { KeyRound, Loader2, AlertCircle, CheckCircle } from "lucide-react";
 
@@ -14,15 +14,30 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [verifying, setVerifying] = useState(true);
+  const [validationError, setValidationError] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
     async function verifyToken() {
+      if (!isSupabaseConfigured()) {
+        setError("Authentication service not configured. Please contact support.");
+        setVerifying(false);
+        return;
+      }
+
       try {
-        // Check for existing session (from reset password link)
-        const { data: { session }, error } = await supabase.auth.getSession();
+        const client = getSupabaseClient();
         
-        if (error) {
+        if (!client) {
+          setError("Failed to initialize authentication. Please refresh.");
+          setVerifying(false);
+          return;
+        }
+
+        // Check for existing session (from reset password link)
+        const { data: { session }, error: sessionError } = await client.auth.getSession();
+        
+        if (sessionError) {
           setError("Invalid or expired reset link");
           setVerifying(false);
           return;
@@ -32,21 +47,30 @@ export default function ResetPasswordPage() {
           setIsReady(true);
           setVerifying(false);
         } else {
-          // Wait a bit for Supabase to process the hash fragment
-          const timeout = setTimeout(() => {
-            setError("Reset link has expired or is invalid. Please request a new one.");
-            setVerifying(false);
-          }, 5000);
-          
-          supabase.auth.onAuthStateChange((event, session) => {
-            if (event === 'SIGNED_IN' && session) {
-              clearTimeout(timeout);
+          // Listen for auth state changes
+          const { data: { subscription } } = client.auth.onAuthStateChange((event, session) => {
+            if (event === 'PASSWORD_RECOVERY' || (event === 'SIGNED_IN' && session?.user)) {
               setIsReady(true);
               setVerifying(false);
+              subscription.unsubscribe();
             }
           });
+
+          // Timeout after 10 seconds
+          const timeout = setTimeout(() => {
+            subscription.unsubscribe();
+            setError("Reset link has expired. Please request a new one.");
+            setVerifying(false);
+          }, 10000);
+
+          // Clean up on unmount
+          return () => {
+            clearTimeout(timeout);
+            subscription.unsubscribe();
+          };
         }
       } catch (err) {
+        console.error("Token verification error:", err);
         setError("Failed to verify reset link");
         setVerifying(false);
       }
@@ -63,33 +87,45 @@ export default function ResetPasswordPage() {
       return;
     }
 
-    setIsLoading(true);
-    setError(null);
+    setValidationError(null);
 
     if (password !== confirmPassword) {
-      setError("Passwords do not match");
-      setIsLoading(false);
+      setValidationError("Passwords do not match");
       return;
     }
 
     if (password.length < 6) {
-      setError("Password must be at least 6 characters");
-      setIsLoading(false);
+      setValidationError("Password must be at least 6 characters");
       return;
     }
 
-    const { error } = await supabase.auth.updateUser({
-      password: password
-    });
+    const client = getSupabaseClient();
+    if (!client) {
+      setError("Authentication service not ready. Please refresh the page.");
+      return;
+    }
 
-    if (error) {
-      setError(error.message);
-      setIsLoading(false);
-    } else {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const { error: updateError } = await client.auth.updateUser({
+        password: password
+      });
+
+      if (updateError) {
+        setError(updateError.message);
+        setIsLoading(false);
+        return;
+      }
+
       setSuccess(true);
       setTimeout(() => {
         router.push("/admin/login");
       }, 2000);
+    } catch (err) {
+      setError("An unexpected error occurred. Please try again.");
+      setIsLoading(false);
     }
   };
 
@@ -133,9 +169,16 @@ export default function ResetPasswordPage() {
 
           <form onSubmit={handleUpdate} className="space-y-6">
             {error && (
-              <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-sm p-4 rounded-sm flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0" />
+              <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-sm p-4 rounded-sm flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                 {error}
+              </div>
+            )}
+
+            {validationError && (
+              <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-sm p-4 rounded-sm flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                {validationError}
               </div>
             )}
             
@@ -149,6 +192,7 @@ export default function ResetPasswordPage() {
                 className="w-full bg-neutral-950 border border-white/10 p-4 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors"
                 placeholder="••••••••"
                 minLength={6}
+                autoComplete="new-password"
               />
             </div>
             
@@ -162,6 +206,7 @@ export default function ResetPasswordPage() {
                 className="w-full bg-neutral-950 border border-white/10 p-4 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors"
                 placeholder="••••••••"
                 minLength={6}
+                autoComplete="new-password"
               />
             </div>
 
@@ -170,7 +215,14 @@ export default function ResetPasswordPage() {
               disabled={isLoading || !isReady}
               className="w-full bg-gold-500 hover:bg-gold-400 text-neutral-950 py-4 font-bold uppercase tracking-widest rounded-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
-              {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Update Password"}
+              {isLoading ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Updating...
+                </>
+              ) : (
+                "Update Password"
+              )}
             </button>
           </form>
         </div>

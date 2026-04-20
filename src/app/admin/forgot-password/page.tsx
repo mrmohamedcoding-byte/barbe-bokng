@@ -2,7 +2,7 @@
 
 import { FadeIn } from "@/components/ui/FadeIn";
 import { useState, useEffect } from "react";
-import { supabase } from "@/lib/supabase";
+import { getSupabaseClient, isSupabaseConfigured } from "@/lib/supabase";
 import { Mail, Loader2, ArrowLeft, CheckCircle, AlertCircle } from "lucide-react";
 import Link from "next/link";
 
@@ -14,20 +14,15 @@ export default function ForgotPasswordPage() {
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    // Check if supabase is initialized
-    const checkClient = async () => {
-      try {
-        const client = supabase as any;
-        if (client && client.auth) {
-          setIsReady(true);
-        } else {
-          setError("Authentication service not ready. Please refresh the page.");
-        }
-      } catch (err) {
-        setError("Failed to initialize authentication service.");
-      }
-    };
-    checkClient();
+    if (!isSupabaseConfigured()) {
+      setError("Authentication service not configured. Please contact support.");
+      return;
+    }
+
+    const client = getSupabaseClient();
+    if (client && client.auth) {
+      setIsReady(true);
+    }
   }, []);
 
   const handleReset = async (e: React.FormEvent) => {
@@ -38,23 +33,35 @@ export default function ForgotPasswordPage() {
       return;
     }
 
+    if (!email) {
+      setError("Please enter your email address.");
+      return;
+    }
+
+    const client = getSupabaseClient();
+    if (!client) {
+      setError("Authentication service not ready. Please refresh the page.");
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
     setSuccess(false);
 
     try {
       const redirectUrl = `${window.location.origin}/admin/reset-password`;
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      const { error: resetError } = await client.auth.resetPasswordForEmail(email, {
         redirectTo: redirectUrl,
       });
 
-      if (error) {
-        setError(error.message);
+      if (resetError) {
+        setError(resetError.message);
       } else {
         setSuccess(true);
       }
-    } catch (err: any) {
-      setError(err.message || "An unexpected error occurred");
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "An unexpected error occurred";
+      setError(errorMessage);
     }
     
     setIsLoading(false);
@@ -113,10 +120,23 @@ export default function ForgotPasswordPage() {
                   disabled={isLoading || !isReady}
                   className="w-full bg-gold-500 hover:bg-gold-400 text-neutral-950 py-4 font-bold uppercase tracking-widest rounded-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
-                  {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Send Reset Link"}
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      Sending...
+                    </>
+                  ) : (
+                    "Send Reset Link"
+                  )}
                 </button>
               </>
             )}
+
+            <div className="text-center pt-2">
+              <Link href="/admin/login" className="text-neutral-400 text-sm hover:text-gold-500 transition-colors">
+                Back to login
+              </Link>
+            </div>
           </form>
         </div>
       </FadeIn>
