@@ -1,8 +1,7 @@
 "use client";
 
-import { FadeIn } from "@/components/ui/FadeIn";
-import { useState, useEffect, useRef } from "react";
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { useState, useEffect } from "react";
+import { createClient } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
 import { Lock, Loader2 } from "lucide-react";
 import Link from "next/link";
@@ -12,72 +11,75 @@ export default function AdminLoginPage() {
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isClientReady, setIsClientReady] = useState(false);
-  const supabaseRef = useRef<SupabaseClient | null>(null);
+  const [isReady, setIsReady] = useState(false);
   const router = useRouter();
 
-  // Initialize Supabase client only on the client side
   useEffect(() => {
+    // Check if already logged in
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
     
-    if (!supabaseUrl || !supabaseKey) {
-      console.error("Missing Supabase environment variables!");
-      setError("Configuration error. Contact administrator.");
-      return;
-    }
-    
-    try {
-      supabaseRef.current = createClient(supabaseUrl, supabaseKey, {
-        auth: {
-          persistSession: true,
-          autoRefreshToken: true,
-        },
+    if (supabaseUrl && supabaseKey) {
+      const supabase = createClient(supabaseUrl, supabaseKey);
+      supabase.auth.getSession().then(({ data }) => {
+        if (data.session) {
+          router.push("/admin");
+        } else {
+          setIsReady(true);
+        }
       });
-      setIsClientReady(true);
-      console.log("Supabase client initialized");
-    } catch (err) {
-      console.error("Failed to create Supabase client:", err);
-      setError("Failed to initialize authentication.");
+    } else {
+      setError("Configuration error");
     }
-  }, []);
+  }, [router]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!supabaseRef.current) {
-      setError("Authentication service not ready. Please refresh the page.");
-      setIsLoading(false);
+    if (!isReady) {
+      setError("Please wait...");
       return;
     }
 
     setIsLoading(true);
     setError(null);
 
-    try {
-      const { error: authError } = await supabaseRef.current.auth.signInWithPassword({
-        email,
-        password,
-      });
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-      if (authError) {
-        setError(authError.message);
-        setIsLoading(false);
-        return;
-      }
-
-      // Login successful - redirect
-      router.push("/admin");
-    } catch (err) {
-      console.error("Login error:", err);
-      setError("An unexpected error occurred. Please try again.");
+    if (!supabaseUrl || !supabaseKey) {
+      setError("Configuration error");
       setIsLoading(false);
+      return;
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    const { error: authError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (authError) {
+      setError(authError.message);
+      setIsLoading(false);
+    } else {
+      // Success - redirect
+      window.location.href = "/admin";
     }
   };
 
+  if (!isReady) {
+    return (
+      <div className="flex flex-col flex-grow bg-neutral-950 items-center justify-center p-4">
+        <Loader2 className="w-10 h-10 text-gold-500 animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col flex-grow bg-neutral-950 items-center justify-center p-4">
-      <FadeIn className="w-full max-w-md">
+      <div className="w-full max-w-md">
         <div className="bg-neutral-900 border border-white/5 p-8 rounded-sm shadow-2xl">
           <div className="flex justify-center mb-6">
             <div className="w-16 h-16 bg-neutral-950 rounded-full flex items-center justify-center text-gold-500 border border-white/5">
@@ -102,7 +104,8 @@ export default function AdminLoginPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full bg-neutral-950 border border-white/10 p-4 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors"
+                disabled={isLoading}
+                className="w-full bg-neutral-950 border border-white/10 p-4 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors disabled:opacity-50"
                 placeholder="admin@example.com"
               />
             </div>
@@ -114,14 +117,15 @@ export default function AdminLoginPage() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-neutral-950 border border-white/10 p-4 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors"
+                disabled={isLoading}
+                className="w-full bg-neutral-950 border border-white/10 p-4 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors disabled:opacity-50"
                 placeholder="••••••••"
               />
             </div>
 
             <button
               type="submit"
-              disabled={isLoading || !isClientReady}
+              disabled={isLoading}
               className="w-full bg-gold-500 hover:bg-gold-400 text-neutral-950 py-4 font-bold uppercase tracking-widest rounded-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Sign In"}
@@ -134,7 +138,7 @@ export default function AdminLoginPage() {
             </div>
           </form>
         </div>
-      </FadeIn>
+      </div>
     </div>
   );
 }

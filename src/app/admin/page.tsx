@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { createClient } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
 import { format, parseISO } from "date-fns";
 import { LogOut, Trash2, Calendar, Clock, User, Phone, Scissors, Loader2 } from "lucide-react";
@@ -22,68 +22,97 @@ export default function AdminDashboardPage() {
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const router = useRouter();
 
-  const fetchAppointments = async () => {
-    const { data, error } = await supabase
-      .from("appointments")
-      .select("*")
-      .order("date", { ascending: true })
-      .order("time", { ascending: true });
-
-    if (!error && data) {
-      setAppointments(data);
-    }
-    setIsLoading(false);
-  };
-
   useEffect(() => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseKey) {
+      setIsLoading(false);
+      return;
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
     const checkUser = async () => {
       const { data: { session } } = await supabase.auth.getSession();
+      
       if (!session) {
         router.push("/admin/login");
-      } else {
-        fetchAppointments();
+        return;
       }
+
+      // Fetch appointments
+      const { data } = await supabase
+        .from("appointments")
+        .select("*")
+        .order("date", { ascending: true })
+        .order("time", { ascending: true });
+
+      if (data) {
+        setAppointments(data);
+      }
+      setIsLoading(false);
+
+      // Subscribe to realtime updates
+      const channel = supabase
+        .channel('schema-db-changes')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'appointments' },
+          () => {
+            supabase
+              .from("appointments")
+              .select("*")
+              .order("date", { ascending: true })
+              .order("time", { ascending: true })
+              .then(({ data }) => {
+                if (data) setAppointments(data);
+              });
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
     };
+
     checkUser();
-
-    // Subscribe to realtime updates
-    const channel = supabase
-      .channel('schema-db-changes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'appointments' },
-        (payload) => {
-          console.log("Realtime update received!", payload);
-          fetchAppointments();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
   }, [router]);
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (supabaseUrl && supabaseKey) {
+      const supabase = createClient(supabaseUrl, supabaseKey);
+      await supabase.auth.signOut();
+    }
     router.push("/admin/login");
   };
 
   const handleDelete = async (id: string) => {
     if (!confirm("Are you sure you want to delete this appointment?")) return;
+    
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseKey) return;
+
     setIsDeleting(id);
+    const supabase = createClient(supabaseUrl, supabaseKey);
+    
     const { error } = await supabase.from("appointments").delete().eq("id", id);
+    
     if (!error) {
       setAppointments(appointments.filter(app => app.id !== id));
-    } else {
-      alert("Failed to delete appointment");
     }
     setIsDeleting(null);
   };
 
   if (isLoading) {
     return (
-      <div className="flex-grow flex items-center justify-center bg-neutral-950">
+      <div className="flex flex-col flex-grow items-center justify-center bg-neutral-950">
         <Loader2 className="w-10 h-10 animate-spin text-gold-500" />
       </div>
     );
@@ -119,13 +148,13 @@ export default function AdminDashboardPage() {
 
         {appointments.length === 0 ? (
           <div className="bg-neutral-900 border border-white/5 p-12 text-center rounded-sm">
+            <Calendar className="w-12 h-12 text-neutral-600 mx-auto mb-4" />
             <p className="text-neutral-400">No appointments scheduled.</p>
           </div>
         ) : (
           <div className="space-y-12">
              {sortedDates.map((date) => {
                const dayApps = groupedAppointments[date];
-               // Check if date is in the past
                const isPast = new Date(date) < new Date(new Date().setHours(0,0,0,0));
                
                return (
