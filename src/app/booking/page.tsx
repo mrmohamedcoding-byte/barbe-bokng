@@ -281,7 +281,6 @@ export default function BookingPage() {
                               : isSelected
                               ? "bg-gold-500 text-neutral-950 border-gold-500"
                               : "bg-neutral-950 border-white/10 text-white hover:border-gold-500/50"
-                              : "bg-neutral-950 border-white/10 text-white hover:border-gold-500/50"
                           }`}
                         >
                           {time}

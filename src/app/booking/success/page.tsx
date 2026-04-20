@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { CheckCircle2, Calendar, Clock, User, Phone, Scissors, Loader2, Home } from "lucide-react";
@@ -14,7 +14,7 @@ interface BookingData {
   time: string;
 }
 
-export default function BookingSuccessPage() {
+function BookingSuccessContent() {
   const searchParams = useSearchParams();
   const [bookingData, setBookingData] = useState<BookingData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -32,7 +32,6 @@ export default function BookingSuccessPage() {
         setError("Failed to load booking details");
       }
     } else if (sessionId) {
-      // Fetch session data from API
       fetch(`/api/stripe/get-session?session_id=${sessionId}`)
         .then((res) => res.json())
         .then((data) => {
@@ -192,5 +191,22 @@ export default function BookingSuccessPage() {
         </div>
       </FadeIn>
     </div>
+  );
+}
+
+function LoadingFallback() {
+  return (
+    <div className="flex flex-col flex-grow items-center justify-center bg-neutral-950 p-4">
+      <Loader2 className="w-12 h-12 text-gold-500 animate-spin" />
+      <p className="text-neutral-400 mt-4">Verifying your booking...</p>
+    </div>
+  );
+}
+
+export default function BookingSuccessPage() {
+  return (
+    <Suspense fallback={<LoadingFallback />}>
+      <BookingSuccessContent />
+    </Suspense>
   );
 }
