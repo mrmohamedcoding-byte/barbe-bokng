@@ -3,11 +3,11 @@
 import { FadeIn } from "@/components/ui/FadeIn";
 import { useState, useEffect } from "react";
 import { format, addDays, startOfToday, isSameDay } from "date-fns";
-import { useForm, Controller } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { getSupabaseClient, isSupabaseConfigured } from "@/lib/supabase";
-import { CheckCircle2, Loader2, Calendar as CalendarIcon, Clock, AlertCircle, WifiOff } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
+import { CheckCircle2, Loader2, Calendar as CalendarIcon, Clock, AlertCircle, CreditCard, ShieldCheck } from "lucide-react";
 
 const bookingSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
@@ -18,14 +18,14 @@ const bookingSchema = z.object({
 type BookingFormValues = z.infer<typeof bookingSchema>;
 
 const SERVICES = [
-  "Classic Haircut ($35)",
-  "Skin Fade ($40)",
-  "Buzz Cut ($25)",
-  "Scissor Cut ($45)",
-  "Beard Sculpting ($25)",
-  "Traditional Hot Towel Shave ($40)",
-  "The Full Gentleman ($55)",
-  "The Executive VIP ($80)",
+  { name: "Classic Haircut ($35)", price: 35, duration: "45 Min" },
+  { name: "Skin Fade ($40)", price: 40, duration: "45 Min" },
+  { name: "Buzz Cut ($25)", price: 25, duration: "30 Min" },
+  { name: "Scissor Cut ($45)", price: 45, duration: "60 Min" },
+  { name: "Beard Sculpting ($25)", price: 25, duration: "30 Min" },
+  { name: "Traditional Hot Towel Shave ($40)", price: 40, duration: "45 Min" },
+  { name: "The Full Gentleman ($55)", price: 55, duration: "75 Min" },
+  { name: "The Executive VIP ($80)", price: 80, duration: "90 Min" },
 ];
 
 const TIME_SLOTS = [
@@ -38,20 +38,33 @@ export default function BookingPage() {
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [bookedSlots, setBookedSlots] = useState<string[]>([]);
   const [isLoadingSlots, setIsLoadingSlots] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [networkError, setNetworkError] = useState<string | null>(null);
+  const [canceledError, setCanceledError] = useState(false);
 
-  const { register, handleSubmit, formState: { errors }, reset } = useForm<BookingFormValues>({
+  const { register, handleSubmit, formState: { errors }, reset, watch } = useForm<BookingFormValues>({
     resolver: zodResolver(bookingSchema),
   });
 
-  // Generate next 14 days for selection
+  const selectedService = watch("service");
+  const selectedServiceData = SERVICES.find(s => s.name === selectedService);
   const upcomingDays = Array.from({ length: 14 }).map((_, i) => addDays(startOfToday(), i));
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("canceled") === "true") {
+      setCanceledError(true);
+      window.history.replaceState({}, "", "/booking");
+    }
+  }, []);
+
+  useEffect(() => {
     async function fetchBookedSlots() {
-      if (!isSupabaseConfigured()) {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+      if (!supabaseUrl || !supabaseKey) {
         setNetworkError("Booking service is not configured. Please try again later.");
         return;
       }
@@ -60,17 +73,11 @@ export default function BookingPage() {
       setSelectedTime(null);
       setNetworkError(null);
       
-      const client = getSupabaseClient();
-      if (!client) {
-        setNetworkError("Failed to connect to booking service. Please refresh.");
-        setIsLoadingSlots(false);
-        return;
-      }
-      
+      const supabase = createClient(supabaseUrl, supabaseKey);
       const formattedDate = format(selectedDate, "yyyy-MM-dd");
       
       try {
-        const { data, error } = await client
+        const { data, error } = await supabase
           .from("appointments")
           .select("time")
           .eq("date", formattedDate);
@@ -95,65 +102,47 @@ export default function BookingPage() {
 
   const onSubmit = async (data: BookingFormValues) => {
     if (!selectedTime) {
-      alert("Please select a time slot");
+      setNetworkError("Please select a time slot");
       return;
     }
 
-    const client = getSupabaseClient();
-    if (!client) {
-      setNetworkError("Failed to connect to booking service. Please refresh.");
+    if (!selectedServiceData) {
+      setNetworkError("Please select a service");
       return;
     }
 
-    setIsSubmitting(true);
+    setIsProcessingPayment(true);
     setNetworkError(null);
     
     const formattedDate = format(selectedDate, "yyyy-MM-dd");
 
     try {
-      const { error } = await client.from("appointments").insert({
-        name: data.name,
-        phone: data.phone,
-        service: data.service,
-        date: formattedDate,
-        time: selectedTime,
+      const response = await fetch('/api/stripe/create-checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          service: data.service,
+          name: data.name,
+          phone: data.phone,
+          date: formattedDate,
+          time: selectedTime,
+        }),
       });
 
-      if (error) {
-        console.error("Booking error:", error);
-        setNetworkError(error.message.includes("duplicate") 
-          ? "This time slot was just booked. Please select another."
-          : "Failed to book appointment. Please try again.");
-        setIsSubmitting(false);
+      const result = await response.json();
+
+      if (result.error || !result.url) {
+        setNetworkError(result.error || "Failed to create payment session");
+        setIsProcessingPayment(false);
         return;
       }
 
-      // Trigger email notification silently
-      try {
-        await fetch('/api/notify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: data.name,
-            phone: data.phone,
-            service: data.service,
-            date: formattedDate,
-            time: selectedTime,
-          })
-        });
-      } catch {
-        // Silent fail - booking already succeeded
-      }
-
-      setIsSuccess(true);
-      reset();
-      setSelectedTime(null);
+      window.location.href = result.url;
     } catch (err) {
-      console.error("Submit error:", err);
-      setNetworkError("Failed to book appointment. Please try again.");
+      console.error("Payment error:", err);
+      setNetworkError("Failed to process payment. Please try again.");
+      setIsProcessingPayment(false);
     }
-    
-    setIsSubmitting(false);
   };
 
   if (isSuccess) {
@@ -165,10 +154,14 @@ export default function BookingPage() {
           </div>
           <h2 className="font-playfair text-3xl font-bold text-white mb-4">Booking Confirmed!</h2>
           <p className="text-neutral-400 mb-8">
-            Thank you for choosing The Gentleman's Club. We look forward to seeing you on {format(selectedDate, "MMMM do, yyyy")} at {selectedTime}.
+            Thank you for choosing The Gentleman's Club. Check your email for confirmation details.
           </p>
           <button
-            onClick={() => setIsSuccess(false)}
+            onClick={() => {
+              setIsSuccess(false);
+              reset();
+              setSelectedTime(null);
+            }}
             className="bg-gold-500 text-neutral-950 px-8 py-3 font-bold uppercase tracking-wider rounded-sm hover:bg-gold-400 transition-colors w-full"
           >
             Book Another
@@ -187,10 +180,23 @@ export default function BookingPage() {
               Book Your <span className="text-gold-500 italic">Appointment</span>
             </h1>
             <p className="text-neutral-400 max-w-xl mx-auto">
-              Select your preferred date, choose from our available time slots, and secure your grooming session.
+              Select your preferred date, choose from our available time slots, and secure your grooming session with payment.
             </p>
           </FadeIn>
         </div>
+
+        {canceledError && (
+          <div className="bg-amber-500/10 border border-amber-500/20 text-amber-400 p-4 rounded-sm mb-8 flex items-center gap-3 max-w-6xl mx-auto">
+            <AlertCircle className="w-5 h-5 shrink-0" />
+            <span>Payment was canceled. Your booking was not completed. Please try again.</span>
+            <button 
+              onClick={() => setCanceledError(false)} 
+              className="ml-auto text-amber-400/70 hover:text-amber-400"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {networkError && (
           <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-sm mb-8 flex items-center gap-3 max-w-6xl mx-auto">
@@ -206,8 +212,6 @@ export default function BookingPage() {
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
-          
-          {/* Step 1 & 2: Date and Time Selection */}
           <div className="lg:col-span-7 space-y-12">
             <FadeIn delay={0.1}>
               <div className="bg-neutral-900 border border-white/5 p-6 md:p-8 rounded-sm">
@@ -216,7 +220,6 @@ export default function BookingPage() {
                   <h2 className="text-xl font-bold text-white uppercase tracking-wider">1. Select Date</h2>
                 </div>
                 
-                {/* Horizontal Date Scroller */}
                 <div className="flex overflow-x-auto pb-4 gap-3 snap-x scrollbar-hide">
                   {upcomingDays.map((day) => {
                     const isSelected = isSameDay(day, selectedDate);
@@ -277,7 +280,8 @@ export default function BookingPage() {
                               ? "opacity-30 cursor-not-allowed bg-neutral-950 border-white/5 text-neutral-500 line-through"
                               : isSelected
                               ? "bg-gold-500 text-neutral-950 border-gold-500"
-                              : "bg-neutral-950 border-white/5 text-white hover:border-gold-500/50"
+                              : "bg-neutral-950 border-white/10 text-white hover:border-gold-500/50"
+                              : "bg-neutral-950 border-white/10 text-white hover:border-gold-500/50"
                           }`}
                         >
                           {time}
@@ -290,27 +294,15 @@ export default function BookingPage() {
             </FadeIn>
           </div>
 
-          {/* Step 3: Client Details */}
           <div className="lg:col-span-5">
             <FadeIn delay={0.3}>
-              <form onSubmit={handleSubmit(onSubmit)} className="bg-neutral-900 border border-white/5 p-6 md:p-8 rounded-sm sticky top-24">
-                <h2 className="text-xl font-bold text-white uppercase tracking-wider mb-6">3. Your Details</h2>
-                
-                <div className="space-y-6">
-                  <div>
-                    <label className="block text-xs uppercase tracking-wider text-neutral-400 font-semibold mb-2">Service</label>
-                    <select
-                      {...register("service")}
-                      className="w-full bg-neutral-950 border border-white/10 p-4 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors appearance-none"
-                    >
-                      <option value="">Select a service...</option>
-                      {SERVICES.map((s) => (
-                        <option key={s} value={s}>{s}</option>
-                      ))}
-                    </select>
-                    {errors.service && <p className="text-red-400 text-xs mt-2">{errors.service.message}</p>}
-                  </div>
+              <form onSubmit={handleSubmit(onSubmit)} className="bg-neutral-900 border border-white/5 p-6 md:p-8 rounded-sm sticky top-8">
+                <h2 className="text-xl font-bold text-white uppercase tracking-wider mb-6 flex items-center gap-3">
+                  <CreditCard className="w-5 h-5 text-gold-500" />
+                  3. Your Details
+                </h2>
 
+                <div className="space-y-6 mb-6">
                   <div>
                     <label className="block text-xs uppercase tracking-wider text-neutral-400 font-semibold mb-2">Full Name</label>
                     <input
@@ -330,35 +322,81 @@ export default function BookingPage() {
                     />
                     {errors.phone && <p className="text-red-400 text-xs mt-2">{errors.phone.message}</p>}
                   </div>
+
+                  <div>
+                    <label className="block text-xs uppercase tracking-wider text-neutral-400 font-semibold mb-2">Select Service</label>
+                    <select
+                      {...register("service")}
+                      className="w-full bg-neutral-950 border border-white/10 p-4 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors"
+                    >
+                      <option value="">Choose a service...</option>
+                      {SERVICES.map((service) => (
+                        <option key={service.name} value={service.name}>
+                          {service.name}
+                        </option>
+                      ))}
+                    </select>
+                    {errors.service && <p className="text-red-400 text-xs mt-2">{errors.service.message}</p>}
+                  </div>
                 </div>
 
                 <div className="mt-8 pt-8 border-t border-white/5">
-                  <div className="flex justify-between items-center mb-6 text-neutral-400 text-sm">
+                  <div className="bg-neutral-950 border border-white/5 rounded-sm p-4 mb-6">
+                    <h3 className="text-xs uppercase tracking-wider text-neutral-500 font-semibold mb-3">Order Summary</h3>
+                    
+                    {selectedServiceData ? (
+                      <div className="space-y-3">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-neutral-400">{selectedServiceData.name}</span>
+                          <span className="text-white font-semibold">€{selectedServiceData.price}</span>
+                        </div>
+                        <div className="flex justify-between text-sm text-neutral-500">
+                          <span>Duration</span>
+                          <span>{selectedServiceData.duration}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-neutral-500 text-sm italic">Select a service to see pricing</p>
+                    )}
+                  </div>
+
+                  <div className="flex justify-between items-center mb-4 text-neutral-400 text-sm">
                     <span>Date & Time:</span>
-                    <span className="text-white font-semibold flex items-center gap-2">
-                       {selectedTime ? `${format(selectedDate, "MMM d, yyyy")} at ${selectedTime}` : "Not selected"}
+                    <span className="text-white font-semibold">
+                      {selectedTime ? `${format(selectedDate, "MMM d, yyyy")} at ${selectedTime}` : "Not selected"}
                     </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-neutral-500 text-xs mb-4">
+                    <ShieldCheck className="w-4 h-4 text-green-500" />
+                    <span>Secure payment powered by Stripe</span>
                   </div>
 
                   <button
                     type="submit"
-                    disabled={isSubmitting || !selectedTime}
+                    disabled={isProcessingPayment || !selectedTime || !selectedServiceData}
                     className="w-full bg-gold-500 hover:bg-gold-400 text-neutral-950 py-4 font-bold uppercase tracking-widest rounded-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   >
-                    {isSubmitting ? (
+                    {isProcessingPayment ? (
                       <>
                         <Loader2 className="w-5 h-5 animate-spin" />
-                        Booking...
+                        Redirecting to Payment...
                       </>
                     ) : (
-                      "Confirm Booking"
+                      <>
+                        <CreditCard className="w-5 h-5" />
+                        Pay & Confirm Booking
+                      </>
                     )}
                   </button>
+
+                  <p className="text-center text-neutral-500 text-xs mt-3">
+                    You'll be redirected to secure payment
+                  </p>
                 </div>
               </form>
             </FadeIn>
           </div>
-
         </div>
       </div>
     </div>

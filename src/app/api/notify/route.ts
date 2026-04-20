@@ -1,14 +1,14 @@
 import { Resend } from 'resend';
 import { NextResponse } from 'next/server';
 
-const resend = new Resend(process.env.RESEND_API_KEY || "re_dummy");
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 export async function POST(request: Request) {
   try {
     const { name, phone, service, date, time } = await request.json();
     const adminEmail = process.env.ADMIN_EMAIL;
 
-    if (!adminEmail || !process.env.RESEND_API_KEY) {
+    if (!adminEmail || !process.env.RESEND_API_KEY || !resend) {
       console.log('Skipping email notification because API keys are not configured yet.');
       return NextResponse.json({ success: true, message: 'Email skipped' });
     }
@@ -16,7 +16,7 @@ export async function POST(request: Request) {
     const { data, error } = await resend.emails.send({
       from: 'Barbershop <onboarding@resend.dev>',
       to: [adminEmail],
-      subject: 'New Booking Alert! ✂️',
+      subject: 'New Booking Alert!',
       html: `
         <div style="font-family: sans-serif; padding: 20px; color: #333;">
           <h2 style="color: #d4af37;">New Booking Received</h2>
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
             <li style="margin-bottom: 10px;"><strong>Date:</strong> ${date}</li>
             <li style="margin-bottom: 10px;"><strong>Time:</strong> ${time}</li>
           </ul>
-          <p>You can manage this booking directly from your <a href="http://localhost:3000/admin" style="color: #d4af37;">Admin Dashboard</a>.</p>
+          <p>You can manage this booking directly from your <a href="#" style="color: #d4af37;">Admin Dashboard</a>.</p>
         </div>
       `
     });
