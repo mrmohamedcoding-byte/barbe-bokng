@@ -7,26 +7,24 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { createClient } from "@supabase/supabase-js";
-import { CheckCircle2, Loader2, Calendar as CalendarIcon, Clock, AlertCircle, CreditCard, ShieldCheck } from "lucide-react";
+import { CheckCircle2, Loader2, Calendar as CalendarIcon, Clock, AlertCircle, Scissors, ShieldCheck } from "lucide-react";
 
 const bookingSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
+  email: z.string().email("Please enter a valid email address").optional().or(z.literal("")),
   phone: z.string().min(8, "Please enter a valid phone number"),
   service: z.string().min(1, "Please select a service"),
+  notes: z.string().max(500, "Notes must be 500 characters or less").optional().or(z.literal("")),
 });
 
 type BookingFormValues = z.infer<typeof bookingSchema>;
 
-const SERVICES = [
-  { name: "Classic Haircut ($35)", price: 35, duration: "45 Min" },
-  { name: "Skin Fade ($40)", price: 40, duration: "45 Min" },
-  { name: "Buzz Cut ($25)", price: 25, duration: "30 Min" },
-  { name: "Scissor Cut ($45)", price: 45, duration: "60 Min" },
-  { name: "Beard Sculpting ($25)", price: 25, duration: "30 Min" },
-  { name: "Traditional Hot Towel Shave ($40)", price: 40, duration: "45 Min" },
-  { name: "The Full Gentleman ($55)", price: 55, duration: "75 Min" },
-  { name: "The Executive VIP ($80)", price: 80, duration: "90 Min" },
-];
+type Service = {
+  id: string;
+  name: string;
+  price_cents: number;
+  duration_minutes: number;
+};
 
 const TIME_SLOTS = [
   "09:00", "10:00", "11:00", "12:00",
@@ -34,29 +32,43 @@ const TIME_SLOTS = [
 ];
 
 export default function BookingPage() {
+  const [services, setServices] = useState<Service[]>([]);
+  const [isLoadingServices, setIsLoadingServices] = useState(true);
   const [selectedDate, setSelectedDate] = useState<Date>(startOfToday());
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [bookedSlots, setBookedSlots] = useState<string[]>([]);
   const [isLoadingSlots, setIsLoadingSlots] = useState(false);
-  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [networkError, setNetworkError] = useState<string | null>(null);
-  const [canceledError, setCanceledError] = useState(false);
 
   const { register, handleSubmit, formState: { errors }, reset, watch } = useForm<BookingFormValues>({
     resolver: zodResolver(bookingSchema),
   });
 
   const selectedService = watch("service");
-  const selectedServiceData = SERVICES.find(s => s.name === selectedService);
+  const selectedServiceData = services.find((s) => s.id === selectedService);
   const upcomingDays = Array.from({ length: 14 }).map((_, i) => addDays(startOfToday(), i));
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("canceled") === "true") {
-      setCanceledError(true);
-      window.history.replaceState({}, "", "/booking");
+    async function loadServices() {
+      setIsLoadingServices(true);
+      try {
+        const response = await fetch("/api/services");
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.error || "Failed to load services");
+        }
+        setServices((result.services || []) as Service[]);
+      } catch (err) {
+        console.error("Failed to load services:", err);
+        setNetworkError("Failed to load available services.");
+      } finally {
+        setIsLoadingServices(false);
+      }
     }
+
+    loadServices();
   }, []);
 
   useEffect(() => {
@@ -80,7 +92,8 @@ export default function BookingPage() {
         const { data, error } = await supabase
           .from("appointments")
           .select("time")
-          .eq("date", formattedDate);
+          .eq("date", formattedDate)
+          .neq("status", "cancelled");
 
         if (error) {
           console.error("Error fetching slots:", error);
@@ -111,37 +124,50 @@ export default function BookingPage() {
       return;
     }
 
-    setIsProcessingPayment(true);
+    setIsSubmitting(true);
     setNetworkError(null);
     
     const formattedDate = format(selectedDate, "yyyy-MM-dd");
 
     try {
-      const response = await fetch('/api/stripe/create-checkout', {
+      const response = await fetch("/api/booking/create", {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          service: data.service,
+          service: selectedServiceData.name,
           name: data.name,
+          email: data.email || null,
           phone: data.phone,
           date: formattedDate,
           time: selectedTime,
+          notes: data.notes || null,
         }),
       });
 
       const result = await response.json();
 
-      if (result.error || !result.url) {
-        setNetworkError(result.error || "Failed to create payment session");
-        setIsProcessingPayment(false);
+      if (!response.ok || result.error) {
+        setNetworkError(result.error || "Failed to create booking");
+        setIsSubmitting(false);
         return;
       }
 
-      window.location.href = result.url;
+      const bookingData = {
+        name: data.name,
+        email: data.email || undefined,
+        phone: data.phone,
+        service: selectedServiceData.name,
+        date: formattedDate,
+        time: selectedTime,
+        notes: data.notes || undefined,
+      };
+
+      const bookingEncoded = btoa(JSON.stringify(bookingData));
+      window.location.href = `/booking/success?booking=${encodeURIComponent(bookingEncoded)}`;
     } catch (err) {
-      console.error("Payment error:", err);
-      setNetworkError("Failed to process payment. Please try again.");
-      setIsProcessingPayment(false);
+      console.error("Booking error:", err);
+      setNetworkError("Failed to create booking. Please try again.");
+      setIsSubmitting(false);
     }
   };
 
@@ -180,23 +206,10 @@ export default function BookingPage() {
               Book Your <span className="text-gold-500 italic">Appointment</span>
             </h1>
             <p className="text-neutral-400 max-w-xl mx-auto">
-              Select your preferred date, choose from our available time slots, and secure your grooming session with payment.
+              Select your preferred date, choose from our available time slots, and confirm your grooming session.
             </p>
           </FadeIn>
         </div>
-
-        {canceledError && (
-          <div className="bg-amber-500/10 border border-amber-500/20 text-amber-400 p-4 rounded-sm mb-8 flex items-center gap-3 max-w-6xl mx-auto">
-            <AlertCircle className="w-5 h-5 shrink-0" />
-            <span>Payment was canceled. Your booking was not completed. Please try again.</span>
-            <button 
-              onClick={() => setCanceledError(false)} 
-              className="ml-auto text-amber-400/70 hover:text-amber-400"
-            >
-              ✕
-            </button>
-          </div>
-        )}
 
         {networkError && (
           <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-sm mb-8 flex items-center gap-3 max-w-6xl mx-auto">
@@ -297,7 +310,7 @@ export default function BookingPage() {
             <FadeIn delay={0.3}>
               <form onSubmit={handleSubmit(onSubmit)} className="bg-neutral-900 border border-white/5 p-6 md:p-8 rounded-sm sticky top-8">
                 <h2 className="text-xl font-bold text-white uppercase tracking-wider mb-6 flex items-center gap-3">
-                  <CreditCard className="w-5 h-5 text-gold-500" />
+                  <Scissors className="w-5 h-5 text-gold-500" />
                   3. Your Details
                 </h2>
 
@@ -310,6 +323,18 @@ export default function BookingPage() {
                       className="w-full bg-neutral-950 border border-white/10 p-4 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors placeholder-neutral-600"
                     />
                     {errors.name && <p className="text-red-400 text-xs mt-2">{errors.name.message}</p>}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs uppercase tracking-wider text-neutral-400 font-semibold mb-2">Email Address (for confirmation)</label>
+                    <input
+                      type="email"
+                      {...register("email")}
+                      placeholder="you@email.com"
+                      className="w-full bg-neutral-950 border border-white/10 p-4 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors placeholder-neutral-600"
+                      autoComplete="email"
+                    />
+                    {errors.email && <p className="text-red-400 text-xs mt-2">{errors.email.message}</p>}
                   </div>
 
                   <div>
@@ -329,13 +354,25 @@ export default function BookingPage() {
                       className="w-full bg-neutral-950 border border-white/10 p-4 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors"
                     >
                       <option value="">Choose a service...</option>
-                      {SERVICES.map((service) => (
-                        <option key={service.name} value={service.name}>
-                          {service.name}
+                      {services.map((service) => (
+                        <option key={service.id} value={service.id}>
+                          {service.name} (${(service.price_cents / 100).toFixed(2)})
                         </option>
                       ))}
                     </select>
+                    {isLoadingServices && <p className="text-neutral-500 text-xs mt-2">Loading services...</p>}
                     {errors.service && <p className="text-red-400 text-xs mt-2">{errors.service.message}</p>}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs uppercase tracking-wider text-neutral-400 font-semibold mb-2">Notes (special requests)</label>
+                    <textarea
+                      {...register("notes")}
+                      placeholder="Anything we should know? (e.g., skin sensitive, preferred style, etc.)"
+                      className="w-full bg-neutral-950 border border-white/10 p-4 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors placeholder-neutral-600 min-h-[120px] resize-y"
+                      maxLength={500}
+                    />
+                    {errors.notes && <p className="text-red-400 text-xs mt-2">{errors.notes.message}</p>}
                   </div>
                 </div>
 
@@ -347,11 +384,11 @@ export default function BookingPage() {
                       <div className="space-y-3">
                         <div className="flex justify-between text-sm">
                           <span className="text-neutral-400">{selectedServiceData.name}</span>
-                          <span className="text-white font-semibold">€{selectedServiceData.price}</span>
+                          <span className="text-white font-semibold">${(selectedServiceData.price_cents / 100).toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between text-sm text-neutral-500">
                           <span>Duration</span>
-                          <span>{selectedServiceData.duration}</span>
+                          <span>{selectedServiceData.duration_minutes} Min</span>
                         </div>
                       </div>
                     ) : (
@@ -368,29 +405,29 @@ export default function BookingPage() {
 
                   <div className="flex items-center gap-2 text-neutral-500 text-xs mb-4">
                     <ShieldCheck className="w-4 h-4 text-green-500" />
-                    <span>Secure payment powered by Stripe</span>
+                    <span>We&apos;ll confirm your appointment instantly</span>
                   </div>
 
                   <button
                     type="submit"
-                    disabled={isProcessingPayment || !selectedTime || !selectedServiceData}
+                    disabled={isSubmitting || !selectedTime || !selectedServiceData || isLoadingServices}
                     className="w-full bg-gold-500 hover:bg-gold-400 text-neutral-950 py-4 font-bold uppercase tracking-widest rounded-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   >
-                    {isProcessingPayment ? (
+                    {isSubmitting ? (
                       <>
                         <Loader2 className="w-5 h-5 animate-spin" />
-                        Redirecting to Payment...
+                        Confirming...
                       </>
                     ) : (
                       <>
-                        <CreditCard className="w-5 h-5" />
-                        Pay & Confirm Booking
+                        <Scissors className="w-5 h-5" />
+                        Confirm Booking
                       </>
                     )}
                   </button>
 
                   <p className="text-center text-neutral-500 text-xs mt-3">
-                    You'll be redirected to secure payment
+                    You&apos;ll be redirected to your confirmation
                   </p>
                 </div>
               </form>

@@ -5,9 +5,19 @@ import { createClient } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
 import { format, parseISO } from "date-fns";
 import { 
-  LogOut, Trash2, Calendar, Clock, User, Phone, Scissors, 
-  Loader2, TrendingUp, DollarSign, Users, BarChart3, PieChart,
-  CheckCircle2, XCircle
+  LogOut,
+  Trash2,
+  Calendar,
+  Clock,
+  Loader2,
+  TrendingUp,
+  Users,
+  BarChart3,
+  PieChart,
+  CheckCircle2,
+  XCircle,
+  Ban,
+  Filter
 } from "lucide-react";
 
 interface Appointment {
@@ -19,26 +29,28 @@ interface Appointment {
   time: string;
   created_at: string;
   status?: string;
-  payment_status?: string;
-  amount_paid?: number;
+  notes?: string | null;
 }
 
 interface DashboardStats {
   totalBookings: number;
-  totalRevenue: number;
   todayBookings: number;
-  pendingPayments: number;
   popularServices: { service: string; count: number }[];
   hourlyDistribution: { hour: string; count: number }[];
-  weeklyData: { day: string; bookings: number; revenue: number }[];
+  weeklyData: { day: string; bookings: number }[];
 }
+
+type BookingStatus = "pending" | "confirmed" | "cancelled";
 
 export default function AdminDashboardPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState<string | null>(null);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [activeTab, setActiveTab] = useState<'appointments' | 'analytics'>('appointments');
+  const [filterDate, setFilterDate] = useState<string>("");
+  const [filterStatus, setFilterStatus] = useState<"all" | BookingStatus>("all");
   const router = useRouter();
 
   useEffect(() => {
@@ -69,6 +81,7 @@ export default function AdminDashboardPage() {
       if (data) {
         setAppointments(data);
         calculateStats(data);
+        setFilterDate(format(new Date(), "yyyy-MM-dd"));
       }
       setIsLoading(false);
 
@@ -104,9 +117,6 @@ export default function AdminDashboardPage() {
   const calculateStats = (data: Appointment[]) => {
     const today = format(new Date(), 'yyyy-MM-dd');
     const todayBookings = data.filter(a => a.date === today).length;
-    const totalRevenue = data
-      .filter(a => a.payment_status === 'paid')
-      .reduce((sum, a) => sum + (a.amount_paid || 0), 0) / 100;
     
     const serviceCount: Record<string, number> = {};
     data.forEach(a => {
@@ -126,7 +136,7 @@ export default function AdminDashboardPage() {
       .map(([hour, count]) => ({ hour, count }))
       .sort((a, b) => a.hour.localeCompare(b.hour));
 
-    const weekData: { day: string; bookings: number; revenue: number }[] = [];
+    const weekData: { day: string; bookings: number }[] = [];
     for (let i = 6; i >= 0; i--) {
       const date = new Date();
       date.setDate(date.getDate() - i);
@@ -135,17 +145,12 @@ export default function AdminDashboardPage() {
       weekData.push({
         day: format(date, 'EEE'),
         bookings: dayBookings.length,
-        revenue: dayBookings
-          .filter(a => a.payment_status === 'paid')
-          .reduce((sum, a) => sum + (a.amount_paid || 0), 0) / 100,
       });
     }
 
     setStats({
       totalBookings: data.length,
-      totalRevenue,
       todayBookings,
-      pendingPayments: data.filter(a => a.payment_status !== 'paid').length,
       popularServices,
       hourlyDistribution,
       weeklyData: weekData,
@@ -184,6 +189,23 @@ export default function AdminDashboardPage() {
     setIsDeleting(null);
   };
 
+  const handleUpdateStatus = async (id: string, status: BookingStatus) => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseKey) return;
+
+    setIsUpdatingStatus(id);
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    const { error } = await supabase.from("appointments").update({ status }).eq("id", id);
+
+    if (error) {
+      alert(error.message);
+    }
+
+    setIsUpdatingStatus(null);
+  };
+
   if (isLoading) {
     return (
       <div className="flex flex-col flex-grow items-center justify-center bg-neutral-950">
@@ -192,18 +214,21 @@ export default function AdminDashboardPage() {
     );
   }
 
-  const groupedAppointments = appointments.reduce((acc, app) => {
-    if (!acc[app.date]) {
-      acc[app.date] = [];
-    }
-    acc[app.date].push(app);
-    return acc;
-  }, {} as Record<string, Appointment[]>);
-
-  const sortedDates = Object.keys(groupedAppointments).sort().reverse();
-
   const maxWeeklyBookings = Math.max(...(stats?.weeklyData.map(d => d.bookings) || [1]));
   const maxHourlyCount = Math.max(...(stats?.hourlyDistribution.map(d => d.count) || [1]));
+
+  const normalizedAppointments = appointments.map((a) => ({
+    ...a,
+    status: (a.status as BookingStatus | undefined) ?? "pending",
+  }));
+
+  const visibleAppointments = normalizedAppointments.filter((a) => {
+    const matchesDate = filterDate ? a.date === filterDate : true;
+    const matchesStatus = filterStatus === "all" ? true : a.status === filterStatus;
+    return matchesDate && matchesStatus;
+  });
+
+  const todaysCount = normalizedAppointments.filter((a) => a.date === format(new Date(), "yyyy-MM-dd")).length;
 
   return (
     <div className="flex flex-col flex-grow bg-neutral-950 px-4 py-8">
@@ -224,7 +249,7 @@ export default function AdminDashboardPage() {
         </div>
 
         {stats && (
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
             <div className="bg-neutral-900 border border-white/5 p-6 rounded-sm">
               <div className="flex items-center justify-between mb-2">
                 <Calendar className="w-5 h-5 text-gold-500" />
@@ -236,19 +261,10 @@ export default function AdminDashboardPage() {
             
             <div className="bg-neutral-900 border border-white/5 p-6 rounded-sm">
               <div className="flex items-center justify-between mb-2">
-                <DollarSign className="w-5 h-5 text-green-500" />
-                <span className="text-xs text-green-400 uppercase tracking-wider">Revenue</span>
-              </div>
-              <p className="text-3xl font-bold text-white">€{stats.totalRevenue.toFixed(0)}</p>
-              <p className="text-xs text-neutral-500 mt-1">Total Earned</p>
-            </div>
-            
-            <div className="bg-neutral-900 border border-white/5 p-6 rounded-sm">
-              <div className="flex items-center justify-between mb-2">
                 <Users className="w-5 h-5 text-blue-500" />
                 <span className="text-xs text-blue-400 uppercase tracking-wider">Today</span>
               </div>
-              <p className="text-3xl font-bold text-white">{stats.todayBookings}</p>
+              <p className="text-3xl font-bold text-white">{todaysCount}</p>
               <p className="text-xs text-neutral-500 mt-1">Appointments</p>
             </div>
             
@@ -295,85 +311,181 @@ export default function AdminDashboardPage() {
         </div>
 
         {activeTab === 'appointments' && (
-          <div className="space-y-8">
-            {appointments.length === 0 ? (
-              <div className="bg-neutral-900 border border-white/5 p-12 text-center rounded-sm">
-                <Calendar className="w-12 h-12 text-neutral-600 mx-auto mb-4" />
-                <p className="text-neutral-400">No appointments scheduled.</p>
-              </div>
-            ) : (
-              sortedDates.map((date) => {
-                const dayApps = groupedAppointments[date];
-                const isPast = new Date(date) < new Date(new Date().setHours(0,0,0,0));
-                
-                return (
-                  <div key={date} className={isPast ? "opacity-50" : ""}>
-                    <div className="flex items-center gap-3 mb-4 border-b border-white/10 pb-4">
-                      <Calendar className="w-5 h-5 text-gold-500" />
-                      <h2 className="text-xl font-bold text-white">
-                        {format(parseISO(date), "EEEE, MMMM do, yyyy")}
-                        {isPast && <span className="ml-3 text-xs uppercase bg-neutral-800 text-neutral-400 px-2 py-1 rounded-sm">Past</span>}
-                      </h2>
-                      <span className="text-neutral-500 text-sm">({dayApps.length} appointments)</span>
-                    </div>
+          <div className="space-y-6">
+            <div className="bg-neutral-900 border border-white/5 p-4 rounded-sm">
+              <div className="flex flex-col md:flex-row gap-4 md:items-end md:justify-between">
+                <div className="flex items-center gap-2 text-neutral-300">
+                  <Filter className="w-4 h-4 text-gold-500" />
+                  <span className="text-sm font-semibold uppercase tracking-wider">Filters</span>
+                </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {dayApps.map((app) => (
-                        <div key={app.id} className="bg-neutral-900 border border-white/5 p-5 rounded-sm relative group">
-                          {isDeleting === app.id && (
-                            <div className="absolute inset-0 bg-neutral-950/80 z-10 flex items-center justify-center rounded-sm">
-                              <Loader2 className="w-6 h-6 animate-spin text-gold-500" />
-                            </div>
-                          )}
-                          
-                          <div className="flex items-center justify-between mb-3">
-                            <span className="text-gold-500 font-bold text-lg flex items-center gap-2">
-                              <Clock className="w-4 h-4" />
-                              {app.time}
-                            </span>
-                            <div className="flex items-center gap-2">
-                              {app.payment_status === 'paid' ? (
-                                <span className="flex items-center gap-1 text-xs text-green-400 bg-green-500/10 px-2 py-1 rounded-sm">
-                                  <CheckCircle2 className="w-3 h-3" />
-                                  Paid
-                                </span>
-                              ) : (
-                                <span className="flex items-center gap-1 text-xs text-amber-400 bg-amber-500/10 px-2 py-1 rounded-sm">
-                                  <XCircle className="w-3 h-3" />
-                                  Pending
-                                </span>
-                              )}
-                              <button
-                                onClick={() => handleDelete(app.id)}
-                                className="text-neutral-600 hover:text-red-500 transition-colors bg-neutral-950 p-1.5 rounded-sm"
-                                title="Delete"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                          
-                          <div className="space-y-2 text-sm">
-                            <div className="flex items-center gap-2">
-                              <User className="w-3.5 h-3.5 text-neutral-500" />
-                              <span className="text-white font-medium">{app.name}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Phone className="w-3.5 h-3.5 text-neutral-500" />
-                              <span className="text-neutral-300">{app.phone}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Scissors className="w-3.5 h-3.5 text-gold-500/70" />
-                              <span className="text-neutral-300">{app.service}</span>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 w-full md:w-auto">
+                  <div>
+                    <label className="block text-xs uppercase tracking-wider text-neutral-500 font-semibold mb-1">
+                      Date
+                    </label>
+                    <input
+                      type="date"
+                      value={filterDate}
+                      onChange={(e) => setFilterDate(e.target.value)}
+                      className="w-full bg-neutral-950 border border-white/10 px-3 py-2 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors"
+                    />
                   </div>
-                );
-              })
-            )}
+                  <div>
+                    <label className="block text-xs uppercase tracking-wider text-neutral-500 font-semibold mb-1">
+                      Status
+                    </label>
+                    <select
+                      value={filterStatus}
+                      onChange={(e) => setFilterStatus(e.target.value as "all" | BookingStatus)}
+                      className="w-full bg-neutral-950 border border-white/10 px-3 py-2 rounded-sm text-white focus:outline-none focus:border-gold-500 transition-colors"
+                    >
+                      <option value="all">All</option>
+                      <option value="pending">Pending</option>
+                      <option value="confirmed">Confirmed</option>
+                      <option value="cancelled">Cancelled</option>
+                    </select>
+                  </div>
+                  <div className="flex items-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFilterDate("");
+                        setFilterStatus("all");
+                      }}
+                      className="w-full bg-neutral-950 border border-white/10 px-3 py-2 rounded-sm text-neutral-300 hover:text-white hover:border-gold-500/40 transition-colors"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-neutral-900 border border-white/5 rounded-sm overflow-hidden">
+              <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <Calendar className="w-5 h-5 text-gold-500" />
+                  <div>
+                    <p className="text-white font-bold">Bookings</p>
+                    <p className="text-neutral-500 text-xs">
+                      Showing <span className="text-neutral-300 font-semibold">{visibleAppointments.length}</span> result(s)
+                    </p>
+                  </div>
+                </div>
+                {filterDate && (
+                  <span className="text-xs uppercase tracking-wider text-neutral-400">
+                    {format(parseISO(filterDate), "MMM d, yyyy")}
+                  </span>
+                )}
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="min-w-[900px] w-full text-sm">
+                  <thead className="bg-neutral-950">
+                    <tr className="text-neutral-400">
+                      <th className="text-left font-semibold uppercase tracking-wider text-xs px-5 py-3">Date</th>
+                      <th className="text-left font-semibold uppercase tracking-wider text-xs px-5 py-3">Time</th>
+                      <th className="text-left font-semibold uppercase tracking-wider text-xs px-5 py-3">Client</th>
+                      <th className="text-left font-semibold uppercase tracking-wider text-xs px-5 py-3">Phone</th>
+                      <th className="text-left font-semibold uppercase tracking-wider text-xs px-5 py-3">Service</th>
+                      <th className="text-left font-semibold uppercase tracking-wider text-xs px-5 py-3">Status</th>
+                      <th className="text-right font-semibold uppercase tracking-wider text-xs px-5 py-3">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleAppointments.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="px-5 py-10 text-center text-neutral-500">
+                          No bookings match your filters.
+                        </td>
+                      </tr>
+                    ) : (
+                      visibleAppointments
+                        .slice()
+                        .sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`))
+                        .map((app) => {
+                          const status = app.status ?? "pending";
+                          const statusUI =
+                            status === "confirmed"
+                              ? { icon: CheckCircle2, label: "Confirmed", cls: "text-green-400 bg-green-500/10 border-green-500/20" }
+                              : status === "cancelled"
+                              ? { icon: Ban, label: "Cancelled", cls: "text-red-400 bg-red-500/10 border-red-500/20" }
+                              : { icon: XCircle, label: "Pending", cls: "text-amber-400 bg-amber-500/10 border-amber-500/20" };
+
+                          const StatusIcon = statusUI.icon;
+
+                          return (
+                            <tr key={app.id} className="border-t border-white/5 hover:bg-white/[0.02]">
+                              <td className="px-5 py-4 text-neutral-300">
+                                {format(parseISO(app.date), "MMM d, yyyy")}
+                              </td>
+                              <td className="px-5 py-4">
+                                <span className="inline-flex items-center gap-2 text-gold-500 font-semibold">
+                                  <Clock className="w-4 h-4" />
+                                  {app.time}
+                                </span>
+                              </td>
+                              <td className="px-5 py-4 text-white font-medium">{app.name}</td>
+                              <td className="px-5 py-4 text-neutral-300">{app.phone}</td>
+                              <td className="px-5 py-4 text-neutral-300">{app.service}</td>
+                              <td className="px-5 py-4">
+                                <span className={`inline-flex items-center gap-2 border px-2.5 py-1 rounded-sm text-xs font-semibold ${statusUI.cls}`}>
+                                  <StatusIcon className="w-3.5 h-3.5" />
+                                  {statusUI.label}
+                                </span>
+                              </td>
+                              <td className="px-5 py-4">
+                                <div className="flex justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={isUpdatingStatus === app.id || status === "confirmed"}
+                                    onClick={() => handleUpdateStatus(app.id, "confirmed")}
+                                    className="bg-neutral-950 border border-white/10 text-neutral-300 hover:text-white hover:border-green-500/40 px-3 py-2 rounded-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title="Mark confirmed"
+                                  >
+                                    {isUpdatingStatus === app.id ? (
+                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                      <CheckCircle2 className="w-4 h-4" />
+                                    )}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isUpdatingStatus === app.id || status === "cancelled"}
+                                    onClick={() => handleUpdateStatus(app.id, "cancelled")}
+                                    className="bg-neutral-950 border border-white/10 text-neutral-300 hover:text-white hover:border-red-500/40 px-3 py-2 rounded-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title="Mark cancelled"
+                                  >
+                                    {isUpdatingStatus === app.id ? (
+                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                      <Ban className="w-4 h-4" />
+                                    )}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isDeleting === app.id}
+                                    onClick={() => handleDelete(app.id)}
+                                    className="bg-neutral-950 border border-white/10 text-neutral-300 hover:text-white hover:border-red-500/40 px-3 py-2 rounded-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title="Delete"
+                                  >
+                                    {isDeleting === app.id ? (
+                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                      <Trash2 className="w-4 h-4" />
+                                    )}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         )}
 
@@ -384,44 +496,21 @@ export default function AdminDashboardPage() {
                 <TrendingUp className="w-5 h-5 text-gold-500" />
                 Weekly Overview
               </h3>
-              <div className="grid grid-cols-2 gap-8">
-                <div>
-                  <p className="text-xs text-neutral-500 uppercase tracking-wider mb-4">Bookings</p>
-                  <div className="flex items-end gap-3 h-40">
-                    {stats.weeklyData.map((day, i) => (
-                      <div key={i} className="flex-1 flex flex-col items-center gap-2">
-                        <div className="w-full bg-neutral-800 rounded-t-sm relative" style={{ height: '160px' }}>
-                          <div 
-                            className="absolute bottom-0 w-full bg-gold-500/80 rounded-t-sm transition-all hover:bg-gold-500"
-                            style={{ height: `${(day.bookings / maxWeeklyBookings) * 100}%` }}
-                          />
-                        </div>
-                        <span className="text-xs text-neutral-500">{day.day}</span>
-                        <span className="text-sm font-bold text-white">{day.bookings}</span>
+              <div>
+                <p className="text-xs text-neutral-500 uppercase tracking-wider mb-4">Bookings</p>
+                <div className="flex items-end gap-3 h-40">
+                  {stats.weeklyData.map((day, i) => (
+                    <div key={i} className="flex-1 flex flex-col items-center gap-2">
+                      <div className="w-full bg-neutral-800 rounded-t-sm relative" style={{ height: '160px' }}>
+                        <div
+                          className="absolute bottom-0 w-full bg-gold-500/80 rounded-t-sm transition-all hover:bg-gold-500"
+                          style={{ height: `${(day.bookings / maxWeeklyBookings) * 100}%` }}
+                        />
                       </div>
-                    ))}
-                  </div>
-                </div>
-                
-                <div>
-                  <p className="text-xs text-neutral-500 uppercase tracking-wider mb-4">Revenue (€)</p>
-                  <div className="flex items-end gap-3 h-40">
-                    {stats.weeklyData.map((day, i) => {
-                      const maxRevenue = Math.max(...stats.weeklyData.map(d => d.revenue), 1);
-                      return (
-                        <div key={i} className="flex-1 flex flex-col items-center gap-2">
-                          <div className="w-full bg-neutral-800 rounded-t-sm relative" style={{ height: '160px' }}>
-                            <div 
-                              className="absolute bottom-0 w-full bg-green-500/80 rounded-t-sm transition-all hover:bg-green-500"
-                              style={{ height: `${(day.revenue / maxRevenue) * 100}%` }}
-                            />
-                          </div>
-                          <span className="text-xs text-neutral-500">{day.day}</span>
-                          <span className="text-sm font-bold text-white">€{day.revenue.toFixed(0)}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
+                      <span className="text-xs text-neutral-500">{day.day}</span>
+                      <span className="text-sm font-bold text-white">{day.bookings}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>

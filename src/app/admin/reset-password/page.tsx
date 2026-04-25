@@ -4,6 +4,7 @@ import { FadeIn } from "@/components/ui/FadeIn";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { KeyRound, Loader2, AlertCircle, CheckCircle } from "lucide-react";
+import { getSupabaseClient, isSupabaseConfigured } from "@/lib/supabase";
 
 export default function ResetPasswordPage() {
   const [password, setPassword] = useState("");
@@ -13,30 +14,43 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [email, setEmail] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
-    // Get token and email from URL params
-    const params = new URLSearchParams(window.location.search);
-    const tokenParam = params.get('token');
-    const emailParam = params.get('email');
-    
-    if (tokenParam && emailParam) {
-      setToken(tokenParam);
-      setEmail(decodeURIComponent(emailParam));
-      setIsValidToken(true);
-    } else {
+    // Supabase recovery links set a session in the URL hash.
+    if (!isSupabaseConfigured()) {
       setIsValidToken(false);
+      setError("Authentication service not configured. Please contact support.");
+      return;
     }
+
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      setIsValidToken(false);
+      setError("Authentication service not ready. Please refresh and try again.");
+      return;
+    }
+
+    supabase.auth.getSession().then(({ data, error: sessionError }) => {
+      if (sessionError) {
+        setError(sessionError.message);
+        setIsValidToken(false);
+        return;
+      }
+
+      if (data.session) {
+        setIsValidToken(true);
+      } else {
+        setIsValidToken(false);
+      }
+    });
   }, []);
 
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!token || !email) {
-      setError("Invalid reset link. Please request a new one.");
+    if (!isSupabaseConfigured()) {
+      setError("Authentication service not configured. Please contact support.");
       return;
     }
 
@@ -61,23 +75,19 @@ export default function ResetPasswordPage() {
     setError(null);
 
     try {
-      const response = await fetch('/api/auth/verify-reset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          email,
-          token,
-          newPassword: password 
-        }),
-      });
+      const supabase = getSupabaseClient();
+      if (!supabase) {
+        throw new Error("Authentication service not ready. Please refresh and try again.");
+      }
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to reset password');
+      const { error: updateError } = await supabase.auth.updateUser({ password });
+      if (updateError) {
+        throw new Error(updateError.message);
       }
 
       setSuccess(true);
+      // End recovery session.
+      await supabase.auth.signOut();
       
       // Redirect after 3 seconds
       setTimeout(() => {

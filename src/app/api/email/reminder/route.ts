@@ -6,6 +6,14 @@ const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KE
 
 export async function POST(request: Request) {
   try {
+    const cronSecret = process.env.CRON_SECRET;
+    if (cronSecret) {
+      const provided = request.headers.get("x-cron-secret");
+      if (provided !== cronSecret) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+    }
+
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     const adminEmail = process.env.ADMIN_EMAIL;
@@ -31,7 +39,6 @@ export async function POST(request: Request) {
       .from('appointments')
       .select('*')
       .eq('date', tomorrowStr)
-      .eq('payment_status', 'paid')
       .eq('reminder_sent', null);
 
     if (error) {

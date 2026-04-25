@@ -22,7 +22,6 @@ function BookingSuccessContent() {
 
   useEffect(() => {
     const bookingEncoded = searchParams.get("booking");
-    const sessionId = searchParams.get("session_id");
 
     if (bookingEncoded) {
       try {
@@ -31,19 +30,6 @@ function BookingSuccessContent() {
       } catch {
         setError("Failed to load booking details");
       }
-    } else if (sessionId) {
-      fetch(`/api/stripe/get-session?session_id=${sessionId}`)
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.status === "complete") {
-            setError(null);
-          } else {
-            setError("Payment verification pending");
-          }
-        })
-        .catch(() => {
-          setError("Failed to verify payment");
-        });
     }
 
     setIsLoading(false);
@@ -117,7 +103,7 @@ function BookingSuccessContent() {
         </h2>
         
         <p className="text-neutral-400 mb-8">
-          Thank you for choosing us! Your appointment has been confirmed and payment was successful.
+          Thank you for choosing us! Your appointment has been confirmed.
         </p>
 
         <div className="bg-neutral-950 border border-white/5 rounded-sm p-6 text-left mb-8">
@@ -138,7 +124,7 @@ function BookingSuccessContent() {
               <Phone className="w-5 h-5 text-neutral-500" />
               <div>
                 <p className="text-xs text-neutral-500 uppercase tracking-wider">Phone</p>
-                <p className="text-white font-medium">{bookingData.phone}</p>
+<p className="text-white font-medium">{bookingData.phone}</p>
               </div>
             </div>
             
@@ -170,7 +156,7 @@ function BookingSuccessContent() {
 
         <div className="bg-green-500/10 border border-green-500/20 rounded-sm p-4 mb-8">
           <p className="text-green-400 text-sm">
-            A confirmation email has been sent to your email address. You'll also receive a reminder 24 hours before your appointment.
+            A confirmation email has been sent to your email address. You&apos;ll also receive a reminder 24 hours before your appointment.
           </p>
         </div>
 
@@ -198,7 +184,7 @@ function LoadingFallback() {
   return (
     <div className="flex flex-col flex-grow items-center justify-center bg-neutral-950 p-4">
       <Loader2 className="w-12 h-12 text-gold-500 animate-spin" />
-      <p className="text-neutral-400 mt-4">Verifying your booking...</p>
+      <p className="text-neutral-400 mt-4">Loading...</p>
     </div>
   );
 }

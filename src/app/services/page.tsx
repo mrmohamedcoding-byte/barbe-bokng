@@ -1,5 +1,5 @@
 import { FadeIn } from "@/components/ui/FadeIn";
-import { Scissors, Sparkles, Droplets, CheckCircle2 } from "lucide-react";
+import { Scissors, Sparkles, Droplets } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
 

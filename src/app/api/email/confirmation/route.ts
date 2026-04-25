@@ -5,7 +5,7 @@ const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KE
 
 export async function POST(request: Request) {
   try {
-    const { name, phone, service, date, time, email } = await request.json();
+    const { name, phone, service, date, time, email, notes } = await request.json();
 
     // Skip if Resend is not configured
     if (!resend) {
@@ -47,6 +47,7 @@ export async function POST(request: Request) {
                   <p><strong>Date:</strong> ${date}</p>
                   <p><strong>Time:</strong> ${time}</p>
                   <p><strong>Phone:</strong> ${phone}</p>
+                  ${notes ? `<p><strong>Notes:</strong> ${notes}</p>` : ``}
                 </div>
                 
                 <p><strong>Reminder:</strong> We'll send you a reminder 24 hours before your appointment.</p>
@@ -71,18 +72,18 @@ export async function POST(request: Request) {
       await resend.emails.send({
         from: 'Barbershop <onboarding@resend.dev>',
         to: [adminEmail],
-        subject: `New Paid Booking - ${name} on ${date}`,
+        subject: `New Booking - ${name} on ${date}`,
         html: `
           <div style="font-family: sans-serif; padding: 20px; color: #333;">
-            <h2 style="color: #d4af37;">New Paid Booking</h2>
-            <p>A new appointment has been booked and paid for.</p>
+            <h2 style="color: #d4af37;">New Booking</h2>
+            <p>A new appointment has been booked.</p>
             <ul style="background: #f9f9f9; padding: 20px; border-radius: 5px; list-style: none;">
               <li style="margin-bottom: 10px;"><strong>Client Name:</strong> ${name}</li>
               <li style="margin-bottom: 10px;"><strong>Phone Number:</strong> ${phone}</li>
               <li style="margin-bottom: 10px;"><strong>Service:</strong> ${service}</li>
               <li style="margin-bottom: 10px;"><strong>Date:</strong> ${date}</li>
               <li style="margin-bottom: 10px;"><strong>Time:</strong> ${time}</li>
-              <li style="margin-bottom: 10px;"><strong>Payment:</strong> <span style="color: green;">Paid</span></li>
+              ${notes ? `<li style="margin-bottom: 10px;"><strong>Notes:</strong> ${notes}</li>` : ``}
             </ul>
           </div>
         `,

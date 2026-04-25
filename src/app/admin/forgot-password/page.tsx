@@ -2,7 +2,7 @@
 
 import { FadeIn } from "@/components/ui/FadeIn";
 import { useState, useEffect } from "react";
-import { isSupabaseConfigured, getSupabaseClient } from "@/lib/supabase";
+import { getSupabaseClient, isSupabaseConfigured } from "@/lib/supabase";
 import { Mail, Loader2, ArrowLeft, CheckCircle, AlertCircle } from "lucide-react";
 import Link from "next/link";
 
@@ -14,15 +14,8 @@ export default function ForgotPasswordPage() {
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    if (!isSupabaseConfigured()) {
-      setError("Authentication service not configured. Please contact support.");
-      return;
-    }
-
-    const client = getSupabaseClient();
-    if (client && client.auth) {
-      setIsReady(true);
-    }
+    // Mark ready on client-side; actual call will validate config.
+    setIsReady(true);
   }, []);
 
   const handleReset = async (e: React.FormEvent) => {
@@ -43,17 +36,21 @@ export default function ForgotPasswordPage() {
     setSuccess(false);
 
     try {
-      // Use custom API for password reset (supports Resend emails)
-      const response = await fetch('/api/auth/request-reset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
+      if (!isSupabaseConfigured()) {
+        throw new Error("Authentication service not configured. Please contact support.");
+      }
+
+      const supabase = getSupabaseClient();
+      if (!supabase) {
+        throw new Error("Authentication service not ready. Please refresh and try again.");
+      }
+
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/admin/reset-password`,
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to send reset email');
+      if (resetError) {
+        throw new Error(resetError.message);
       }
 
       setSuccess(true);

@@ -5,6 +5,14 @@ const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KE
 
 export async function POST(request: Request) {
   try {
+    const notifySecret = process.env.NOTIFY_SECRET;
+    if (notifySecret) {
+      const provided = request.headers.get("x-notify-secret");
+      if (provided !== notifySecret) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+    }
+
     const { name, phone, service, date, time } = await request.json();
     const adminEmail = process.env.ADMIN_EMAIL;
 
