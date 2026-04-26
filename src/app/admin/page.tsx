@@ -51,6 +51,7 @@ export default function AdminDashboardPage() {
   const [activeTab, setActiveTab] = useState<'appointments' | 'analytics'>('appointments');
   const [filterDate, setFilterDate] = useState<string>("");
   const [filterStatus, setFilterStatus] = useState<"all" | BookingStatus>("all");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -72,43 +73,20 @@ export default function AdminDashboardPage() {
         return;
       }
 
-      const { data } = await supabase
-        .from("appointments")
-        .select("*")
-        .order("date", { ascending: false })
-        .order("time", { ascending: true });
-
-      if (data) {
-        setAppointments(data);
-        calculateStats(data);
+      try {
+        const res = await fetch("/api/admin/appointments");
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Failed to load dashboard");
+        const list = json.appointments || [];
+        setAppointments(list);
+        calculateStats(list);
         setFilterDate(format(new Date(), "yyyy-MM-dd"));
+        setLoadError(null);
+      } catch (e) {
+        setLoadError(e instanceof Error ? e.message : "Failed to load dashboard");
+      } finally {
+        setIsLoading(false);
       }
-      setIsLoading(false);
-
-      const channel = supabase
-        .channel('schema-db-changes')
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'appointments' },
-          () => {
-            supabase
-              .from("appointments")
-              .select("*")
-              .order("date", { ascending: false })
-              .order("time", { ascending: true })
-              .then(({ data }) => {
-                if (data) {
-                  setAppointments(data);
-                  calculateStats(data);
-                }
-              });
-          }
-        )
-        .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-      };
     };
 
     checkUser();
@@ -170,37 +148,34 @@ export default function AdminDashboardPage() {
 
   const handleDelete = async (id: string) => {
     if (!confirm("Are you sure you want to delete this appointment?")) return;
-    
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!supabaseUrl || !supabaseKey) return;
 
     setIsDeleting(id);
-    const supabase = createClient(supabaseUrl, supabaseKey);
-    
-    const { error } = await supabase.from("appointments").delete().eq("id", id);
-    
-    if (!error) {
+    const res = await fetch(`/api/admin/appointments/${id}`, { method: "DELETE" });
+    const json = await res.json().catch(() => ({}));
+
+    if (res.ok) {
       const updatedData = appointments.filter(app => app.id !== id);
       setAppointments(updatedData);
       calculateStats(updatedData);
+    } else {
+      alert(json.error || "Failed to delete appointment");
     }
     setIsDeleting(null);
   };
 
   const handleUpdateStatus = async (id: string, status: BookingStatus) => {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!supabaseUrl || !supabaseKey) return;
-
     setIsUpdatingStatus(id);
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    const res = await fetch(`/api/admin/appointments/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    const json = await res.json().catch(() => ({}));
 
-    const { error } = await supabase.from("appointments").update({ status }).eq("id", id);
-
-    if (error) {
-      alert(error.message);
+    if (!res.ok) {
+      alert(json.error || "Failed to update status");
+    } else {
+      setAppointments((prev) => prev.map((a) => (a.id === id ? { ...a, status } : a)));
     }
 
     setIsUpdatingStatus(null);
@@ -247,6 +222,12 @@ export default function AdminDashboardPage() {
             <span className="text-sm font-semibold uppercase tracking-wider">Logout</span>
           </button>
         </div>
+
+        {loadError && (
+          <div className="mb-6 bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-sm">
+            {loadError}
+          </div>
+        )}
 
         {stats && (
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-8">

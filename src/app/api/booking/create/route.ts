@@ -45,71 +45,98 @@ export async function POST(request: Request) {
       .eq("time", time)
       .limit(1);
 
+    let existingRows: Array<{ id?: string; status?: string | null }> = existing || [];
     if (existingError) {
-      console.error("Double-booking check failed:", existingError);
-      return NextResponse.json({ error: "Failed to validate availability" }, { status: 500 });
+      console.warn("Double-booking check with status failed, retrying id-only check:", existingError.message);
+      const idOnlyAttempt = await supabase
+        .from("appointments")
+        .select("id")
+        .eq("date", date)
+        .eq("time", time)
+        .limit(1);
+
+      if (idOnlyAttempt.error) {
+        console.warn("Double-booking check unavailable, continuing with insert:", idOnlyAttempt.error.message);
+        existingRows = [];
+      } else {
+        existingRows = idOnlyAttempt.data || [];
+      }
     }
 
-    const isTaken =
-      (existing || []).some((a: { status?: string | null }) => (a.status ?? "pending") !== "cancelled");
+    const isTaken = existingRows.length > 0;
 
     if (isTaken) {
       return NextResponse.json({ error: "This time slot was just booked. Please choose another." }, { status: 409 });
     }
 
-    // Insert booking (status starts as pending, admin can confirm/cancel)
-    const baseInsert = {
-      name,
-      phone,
-      service,
-      date,
-      time,
-      status: "pending",
-    } as Record<string, unknown>;
+    const cleanNotes = typeof notes === "string" && notes.trim() ? notes.trim() : null;
+    const cleanEmail = typeof email === "string" && email.trim() ? email.trim() : null;
 
-    // Try to persist extra fields if your table supports them.
-    if (typeof notes === "string" && notes.trim()) baseInsert.notes = notes.trim();
-    if (typeof email === "string" && email.trim()) baseInsert.email = email.trim();
+    // Try progressively: with optional fields, then without them; with status, then without status.
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseWithStatus: Record<string, unknown> = { name, phone, service, date, time, status: "pending" };
+    const baseNoStatus: Record<string, unknown> = { name, phone, service, date, time };
+    const withOptional = (base: Record<string, unknown>) => ({
+      ...base,
+      ...(cleanNotes ? { notes: cleanNotes } : {}),
+      ...(cleanEmail ? { email: cleanEmail } : {}),
+    });
+    payloads.push(withOptional(baseWithStatus), withOptional(baseNoStatus), baseWithStatus, baseNoStatus);
 
     let createdId: string | null = null;
-    const insertAttempt = await supabase
-      .from("appointments")
-      .insert(baseInsert)
-      .select("id")
-      .single();
+    let inserted = false;
+    let lastInsertError: { message?: string } | null = null;
 
-    if (insertAttempt.error) {
-      // If schema doesn't have notes/email, retry without them (keeps app functional).
-      const message = insertAttempt.error.message || "";
-      const looksLikeMissingColumn =
-        message.includes("column") && (message.includes("notes") || message.includes("email"));
-
-      if (!looksLikeMissingColumn) {
-        console.error("Failed to create appointment:", insertAttempt.error);
-        return NextResponse.json({ error: "Failed to create booking" }, { status: 500 });
+    for (const payload of payloads) {
+      const withSelect = await supabase.from("appointments").insert(payload).select("id").single();
+      if (!withSelect.error) {
+        inserted = true;
+        createdId = withSelect.data?.id ?? null;
+        break;
       }
 
-      const { data: createdFallback, error: fallbackError } = await supabase
+      const msg = (withSelect.error.message || "").toLowerCase();
+      const selectPermissionIssue = msg.includes("permission") || msg.includes("not allowed");
+      const columnIssue = msg.includes("column");
+
+      // Retry without select when insert succeeds but select is blocked by policy.
+      if (selectPermissionIssue) {
+        const noSelect = await supabase.from("appointments").insert(payload);
+        if (!noSelect.error) {
+          inserted = true;
+          break;
+        }
+        lastInsertError = noSelect.error;
+        continue;
+      }
+
+      // Continue trying fallback payloads on missing/unsupported columns.
+      if (columnIssue) {
+        lastInsertError = withSelect.error;
+        continue;
+      }
+
+      lastInsertError = withSelect.error;
+    }
+
+    if (!inserted) {
+      console.error("Failed to create appointment:", lastInsertError);
+      return NextResponse.json({ error: "Failed to create booking" }, { status: 500 });
+    }
+
+    // If create succeeded but no id could be selected, keep response successful.
+    if (!createdId) {
+      const bestEffortLookup = await supabase
         .from("appointments")
-        .insert({
-          name,
-          phone,
-          service,
-          date,
-          time,
-          status: "pending",
-        })
         .select("id")
-        .single();
-
-      if (fallbackError) {
-        console.error("Failed to create appointment (fallback):", fallbackError);
-        return NextResponse.json({ error: "Failed to create booking" }, { status: 500 });
+        .eq("date", date)
+        .eq("time", time)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!bestEffortLookup.error) {
+        createdId = bestEffortLookup.data?.id ?? null;
       }
-
-      createdId = createdFallback?.id ?? null;
-    } else {
-      createdId = insertAttempt.data?.id ?? null;
     }
 
     // Send confirmation email to client + admin notification (optional).
